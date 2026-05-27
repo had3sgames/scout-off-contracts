@@ -7,6 +7,9 @@ use types::{DataKey, Milestone, Validator};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
+const MILESTONE_TTL_THRESHOLD: u32 = 100;
+const MILESTONE_TTL_EXTEND_TO: u32 = 518_400; // ~1 year at 5s/ledger
+
 // Generated client for the progress contract — used for cross-contract calls.
 // The progress contract must be deployed and its address registered via
 // `set_progress_contract` before `approve_milestone` can advance levels.
@@ -164,9 +167,19 @@ impl VerificationContract {
         env.storage()
             .persistent()
             .set(&DataKey::Milestone(player_id, next_index), &milestone);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Milestone(player_id, next_index),
+            MILESTONE_TTL_THRESHOLD,
+            MILESTONE_TTL_EXTEND_TO,
+        );
         env.storage()
             .persistent()
             .set(&counter_key, &next_index);
+        env.storage().persistent().extend_ttl(
+            &counter_key,
+            MILESTONE_TTL_THRESHOLD,
+            MILESTONE_TTL_EXTEND_TO,
+        );
 
         events::milestone_approved(&env, player_id, &validator_wallet);
 
@@ -202,10 +215,18 @@ impl VerificationContract {
         player_id: u64,
         index: u32,
     ) -> Result<Milestone, VerificationError> {
-        env.storage()
+        let key = DataKey::Milestone(player_id, index);
+        let milestone = env
+            .storage()
             .persistent()
-            .get(&DataKey::Milestone(player_id, index))
-            .ok_or(VerificationError::InvalidInput)
+            .get(&key)
+            .ok_or(VerificationError::InvalidInput)?;
+        env.storage().persistent().extend_ttl(
+            &key,
+            MILESTONE_TTL_THRESHOLD,
+            MILESTONE_TTL_EXTEND_TO,
+        );
+        Ok(milestone)
     }
 
     pub fn get_milestone_count(env: Env, player_id: u64) -> u32 {
@@ -406,5 +427,32 @@ mod tests {
             &String::from_str(&env, "Some milestone"),
             &String::from_str(&env, "QmEvidence"),
         );
+    }
+
+    #[test]
+    fn test_milestone_accessible_after_ledger_advancement() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "Scored 5 goals"),
+            &String::from_str(&env, "QmEvidence"),
+        );
+
+        // Advance ledger sequence to simulate time passing
+        env.ledger().with_mut(|li| {
+            li.sequence_number += 10_000;
+            li.timestamp += 50_000;
+        });
+
+        // Milestone should still be accessible (TTL was bumped on write)
+        let milestone = client.get_milestone(&1u64, &1);
+        assert_eq!(milestone.player_id, 1u64);
     }
 }
