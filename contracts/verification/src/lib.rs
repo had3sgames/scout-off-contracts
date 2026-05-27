@@ -16,6 +16,14 @@ mod progress_contract {
     );
 }
 
+// Generated client for the registration contract — used to verify player existence.
+// Optional: only checked if set via `set_registration_contract`.
+mod registration_contract {
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32-unknown-unknown/release/scoutchain_registration.wasm"
+    );
+}
+
 #[contract]
 pub struct VerificationContract;
 
@@ -46,6 +54,19 @@ impl VerificationContract {
         env.storage()
             .instance()
             .set(&DataKey::ProgressContract, &progress_contract);
+        Ok(())
+    }
+
+    /// Store the registration contract address for player existence checks (admin only).
+    /// When set, approve_milestone will verify the player exists before recording a milestone.
+    pub fn set_registration_contract(
+        env: Env,
+        registration_contract: Address,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RegistrationContract, &registration_contract);
         Ok(())
     }
 
@@ -141,6 +162,18 @@ impl VerificationContract {
 
         if !validator.active {
             return Err(VerificationError::ValidatorInactive);
+        }
+
+        // Optional cross-contract check: verify player exists in registration contract.
+        if let Some(reg_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RegistrationContract)
+        {
+            let reg_client = registration_contract::Client::new(&env, &reg_addr);
+            if reg_client.try_get_player(&player_id).is_err() {
+                return Err(VerificationError::PlayerNotFound);
+            }
         }
 
         // Increment milestone counter for this player
@@ -405,6 +438,53 @@ mod tests {
             &1u64,
             &String::from_str(&env, "Some milestone"),
             &String::from_str(&env, "QmEvidence"),
+        );
+    }
+
+    #[test]
+    fn test_approve_milestone_skips_player_check_without_registration_contract() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        // No registration contract set — player existence check is skipped
+        // player_id 9999 does not exist anywhere, but milestone is still recorded
+        let idx = client.approve_milestone(
+            &validator,
+            &9999u64,
+            &String::from_str(&env, "Ghost milestone"),
+            &String::from_str(&env, "QmGhost"),
+        );
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_approve_milestone_returns_player_not_found_with_registration_contract() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        // Register the registration contract and wire it
+        let reg_id = env.register_contract_wasm(None, registration_contract::WASM);
+        let reg_client = registration_contract::Client::new(&env, &reg_id);
+        let reg_admin = Address::generate(&env);
+        reg_client.initialize(&reg_admin);
+
+        client.set_registration_contract(&reg_id);
+
+        // player_id 9999 was never registered — should panic with PlayerNotFound
+        client.approve_milestone(
+            &validator,
+            &9999u64,
+            &String::from_str(&env, "Ghost milestone"),
+            &String::from_str(&env, "QmGhost"),
         );
     }
 }
