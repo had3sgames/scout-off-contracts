@@ -407,4 +407,17 @@ mod tests {
             &String::from_str(&env, "QmEvidence"),
         );
     }
+
+    #[test]
+    #[should_panic]
+    fn test_register_validator_duplicate_fails() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "UEFA B License"));
+        // Second registration with same wallet should panic with ValidatorAlreadyRegistered
+        client.register_validator(&validator, &String::from_str(&env, "UEFA B License"));
+    }
 }
