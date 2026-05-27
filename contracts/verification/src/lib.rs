@@ -5,7 +5,7 @@ mod types;
 use errors::VerificationError;
 use types::{DataKey, Milestone, Validator};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 // Generated client for the progress contract — used for cross-contract calls.
 // The progress contract must be deployed and its address registered via
@@ -215,6 +215,27 @@ impl VerificationContract {
             .unwrap_or(0u32)
     }
 
+    /// Return all milestones for a player, capped at 50 to bound gas.
+    pub fn get_all_milestones_for_player(env: Env, player_id: u64) -> Vec<Milestone> {
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MilestoneCounter(player_id))
+            .unwrap_or(0u32);
+        let limit = count.min(50);
+        let mut result = Vec::new(&env);
+        for i in 1..=limit {
+            if let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Milestone>(&DataKey::Milestone(player_id, i))
+            {
+                result.push_back(m);
+            }
+        }
+        result
+    }
+
     pub fn get_validator(env: Env, wallet: Address) -> Result<Validator, VerificationError> {
         env.storage()
             .persistent()
@@ -406,5 +427,32 @@ mod tests {
             &String::from_str(&env, "Some milestone"),
             &String::from_str(&env, "QmEvidence"),
         );
+    }
+
+    #[test]
+    fn test_get_all_milestones_for_player() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        client.approve_milestone(&validator, &1u64, &String::from_str(&env, "M1"), &String::from_str(&env, "Qm1"));
+        client.approve_milestone(&validator, &1u64, &String::from_str(&env, "M2"), &String::from_str(&env, "Qm2"));
+        client.approve_milestone(&validator, &1u64, &String::from_str(&env, "M3"), &String::from_str(&env, "Qm3"));
+
+        let all = client.get_all_milestones_for_player(&1u64);
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_get_all_milestones_empty_for_new_player() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let all = client.get_all_milestones_for_player(&999u64);
+        assert_eq!(all.len(), 0);
     }
 }
