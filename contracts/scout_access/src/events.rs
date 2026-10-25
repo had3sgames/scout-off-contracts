@@ -97,6 +97,17 @@ pub struct TrialEscrowAdminRefunded {
     pub amount: i128,
 }
 
+/// Emitted when an admin rescues an orphan trial escrow (no `TrialOffer`
+/// record) to an admin-chosen address.
+#[contractevent]
+pub struct TrialEscrowOrphanRescued {
+    #[topic]
+    pub to: Address,
+    pub player_id: u64,
+    pub index: u32,
+    pub amount: i128,
+}
+
 /// Emitted by `withdraw_fees`.
 #[contractevent]
 pub struct FeesWithdrawn {
@@ -326,6 +337,22 @@ pub fn trial_offer_expired(env: &Env, player_id: u64, scout: &Address, index: u3
         index,
     }
     .publish(env);
+}
+
+pub fn trial_escrow_orphan_rescued(
+    env: &Env,
+    player_id: u64,
+    index: u32,
+    to: &Address,
+    amount: i128,
+) {
+    TrialEscrowOrphanRescued {
+        to: to.clone(),
+        player_id,
+        index,
+        amount,
+    }
+    .emit(env);
 }
 
 pub fn trial_escrow_admin_refunded(
